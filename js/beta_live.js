@@ -37,12 +37,9 @@
 
   // ⏱️ Stajanje na stanicama (u sekundama) – ali ukupno trajanje ostaje iz POLASCI trajanje
 const DWELL_TIME = 2;
-const ETA_ALIGN = 0.5; // sekundi – mikro poravnanje
-
 
 // tolerancija (u metrima) za “uhvati stanicu”
 const STOP_EPS = 10;
-
 
   function isDepotEnd(routeKey) {
     // dolazak u spremište kad je odredište S (npr. "...-S")
@@ -78,16 +75,21 @@ const STOP_EPS = 10;
 const SUNDAY_ALLOWED_LINES = new Set(['1','2','3','4']);
 
 const SUNDAY_ALLOWED_VEHICLES = new Set([
-  '11','14','21','23','31','33','41','45'
+  '11','12','14','21','23','31','33','43','45'
 ]);
 
   // Vozila koja NE VOZE SUBOTOM (samo dnevne linije)
 const SATURDAY_DISABLED_VEHICLES = new Set([
-  'B102',
-  'B202',
-  'B302',
-  'B402',
-  'B502'
+  '52',
+  '62',
+  '72',
+  '92',
+  '112',
+  '122',
+    '132',
+      '152',
+
+
 ]);
 
 function isSaturday(d = new Date()) {
@@ -100,7 +102,6 @@ function isVehicleDisabledToday(vozilo, linija) {
   if (!isRegularLine(linija)) return false;
   return SATURDAY_DISABLED_VEHICLES.has(vozilo);
 }
-
 
   function isSpecialDay(d = new Date()) {
     const md = pad2(d.getMonth() + 1) + '-' + pad2(d.getDate());
@@ -155,7 +156,6 @@ const VEH_SPECIAL_ONLY = new Set([
   'B802','B902'
 ]);
 
-
 function tripAllowedNow(tr, tNowSec) {
   const v = String(tr.vozilo || '').trim();
   const d = new Date();
@@ -201,7 +201,6 @@ if (isSunOrSpecial) {
   // ✅ SVE OSTALO: VOZI AKO POSTOJI TRIP
   return true;
 }
-
 
 
 
@@ -544,101 +543,91 @@ function getNextStopByDistance(routeKey, currentDistMeters) {
 
 function arrivalsForStation(stationId, tNow) {
   const best = [];
-  const HORIZON = 10 * 60;
+  const HORIZON = 15 * 60;
+  const FAR_HORIZON = 60 * 60; // ✅ 60 min fallback
 
   // ✅ PO VOZILU (ne po linija+smjer)
   for (const [vozilo, arr] of tripsByVehicle.entries()) {
-    // sortirani su već globalno, ali sigurnije:
-    // arr.sort((a,b)=>a._t0-b._t0);
 
-    // nađi aktivan ili sljedeći trip za ovo vozilo
-    let tr = null;
-    for (const cand of arr) {
-      const rk0 = pickRouteKeyForTrip(cand);
-      if (!rk0) continue;
+    // 🔥 PROĐI SVE TRIPOVE VOZILA (ne samo jedan!)
+    for (const tr of arr) {
+
+      const rk = pickRouteKeyForTrip(tr);
+      if (!rk) continue;
 
       // ⛔ samo tripovi koji su danas dozvoljeni
-      if (!tripAllowedNow(cand, tNow)) continue;
+      if (!tripAllowedNow(tr, tNow)) continue;
 
       // stanica mora biti na toj ruti
-      const list0 = getRouteStationDistances(rk0);
-      if (!list0) continue;
-      if (!list0.find(x => x.id === stationId)) continue;
+      const list = getRouteStationDistances(rk);
+      if (!list) continue;
 
-      if (isActiveTrip(cand, tNow)) { tr = cand; break; }
-      if (cand._t0 > tNow) { tr = cand; break; }
+      const st = list.find(x => x.id === stationId);
+      if (!st) continue;
+
+      const r = buildRoute(rk);
+      if (!r || r.total <= 0) continue;
+
+      let secondsLeft;
+
+      if (isActiveTrip(tr, tNow)) {
+        // 🚋 vozilo je u vožnji
+
+        let tInTrip = tNow;
+        if (tr._t1 >= DAY && tNow < tr._t0) tInTrip = tNow + DAY;
+
+        const tripDur = (tr._t1 - tr._t0);
+        const tRel = clamp(tInTrip - tr._t0, 0, tripDur);
+
+        const nStops = list.length;
+
+        // isto kao tvoj kod prije (da ne mijenjamo ponašanje)
+        const dwellTotal = Math.max(0, (nStops - 1) * DWELL_TIME);
+        const runTime = Math.max(1, tripDur - dwellTotal);
+
+        const stIndex = list.indexOf(st);
+
+        const arriveRun  = (st.dist / r.total) * runTime;
+        const arriveReal = arriveRun + Math.max(0, (stIndex - 1)) * DWELL_TIME;
+
+        // ako je već prošla (i odradila dwell) → skip
+        if (tRel >= arriveReal + DWELL_TIME) continue;
+
+        secondsLeft = Math.max(0, arriveReal - tRel);
+
+      } else {
+        // 🕒 tek kreće
+
+        let untilStart = tr._t0 - tNow;
+        if (untilStart < 0) untilStart += DAY;
+
+        const tripDur = (tr._t1 - tr._t0);
+        const nStops = list.length;
+
+        const dwellTotal = Math.max(0, (nStops - 2) * DWELL_TIME);
+        const runTime = Math.max(1, tripDur - dwellTotal);
+
+        const stIndex = list.indexOf(st);
+        const arriveRun  = (st.dist / r.total) * runTime;
+        const arriveReal = arriveRun + Math.max(0, (stIndex - 1)) * DWELL_TIME;
+
+        secondsLeft = untilStart + arriveReal;
+      }
+
+      // samo u idućih 10 min
+      if (secondsLeft < 0 || secondsLeft > HORIZON) continue;
+
+      const fmt = formatMinsSmart(secondsLeft);
+
+      best.push({
+        vozilo: vozilo,
+        linija: tr.linija,
+        smjer: destFromRouteKey(rk),
+        label: fmt.label,
+        sortMin: fmt.sortMin,
+        secondsLeft: secondsLeft
+      });
     }
-    if (!tr) continue;
-
-    const rk = pickRouteKeyForTrip(tr);
-    if (!rk) continue;
-
-    const list = getRouteStationDistances(rk);
-    if (!list) continue;
-
-    const st = list.find(x => x.id === stationId);
-    if (!st) continue;
-
-    const r = buildRoute(rk);
-    if (!r || r.total <= 0) continue;
-
-    let secondsLeft;
-
-    if (isActiveTrip(tr, tNow)) {
-      // 🚋 vozilo je u vožnji (isti DWELL timing kao render)
-
-      let tInTrip = tNow;
-      if (tr._t1 >= DAY && tNow < tr._t0) tInTrip = tNow + DAY;
-
-      const tripDur = (tr._t1 - tr._t0);
-      const tRel = clamp(tInTrip - tr._t0, 0, tripDur);
-
-      const nStops = list.length;
-      const dwellTotal = Math.max(0, (nStops - 1) * DWELL_TIME);
-      const runTime = Math.max(1, tripDur - dwellTotal);
-
-      const stIndex = list.indexOf(st);
-
-      const arriveRun  = (st.dist / r.total) * runTime;
-      const arriveReal = arriveRun + Math.max(0, (stIndex - 1)) * DWELL_TIME;
-
-      // ako je već prošla (i odradila dwell) → skip
-      if (tRel >= arriveReal + DWELL_TIME) continue;
-
-      secondsLeft = Math.max(0, arriveReal - tRel);
-
-    } else {
-      // 🕒 tek kreće
-
-      let untilStart = tr._t0 - tNow;
-      if (untilStart < 0) untilStart += DAY;
-
-      const tripDur = (tr._t1 - tr._t0);
-      const nStops = list.length;
-
-      const dwellTotal = Math.max(0, (nStops - 2) * DWELL_TIME);
-      const runTime = Math.max(1, tripDur - dwellTotal);
-
-      const stIndex = list.indexOf(st);
-      const arriveRun  = (st.dist / r.total) * runTime;
-      const arriveReal = arriveRun + Math.max(0, (stIndex - 1)) * DWELL_TIME;
-
-      secondsLeft = untilStart + arriveReal;
-    }
-
-    // samo u idućih 10 min
-    if (secondsLeft < 0 || secondsLeft > HORIZON) continue;
-
-    const fmt = formatMinsSmart(secondsLeft);
-
-    best.push({
-      vozilo: vozilo,
-      linija: tr.linija,
-      smjer: destFromRouteKey(rk),
-      label: fmt.label,
-      sortMin: fmt.sortMin,
-      secondsLeft: secondsLeft
-    });
   }
 
   return best.sort((a, b) => {
@@ -649,6 +638,86 @@ function arrivalsForStation(stationId, tNow) {
   });
 }
 
+function nextArrivalWithin60Min(stationId, tNow) {
+  let bestOne = null;
+  const FAR_HORIZON = 60 * 60;
+
+  for (const [vozilo, arr] of tripsByVehicle.entries()) {
+    for (const tr of arr) {
+
+      const rk = pickRouteKeyForTrip(tr);
+      if (!rk) continue;
+      if (!tripAllowedNow(tr, tNow)) continue;
+
+      const list = getRouteStationDistances(rk);
+      if (!list) continue;
+
+      const st = list.find(x => x.id === stationId);
+      if (!st) continue;
+
+      const r = buildRoute(rk);
+      if (!r || r.total <= 0) continue;
+
+      let secondsLeft;
+
+      if (isActiveTrip(tr, tNow)) {
+        let tInTrip = tNow;
+        if (tr._t1 >= DAY && tNow < tr._t0) tInTrip = tNow + DAY;
+
+        const tripDur = (tr._t1 - tr._t0);
+        const tRel = clamp(tInTrip - tr._t0, 0, tripDur);
+
+        const nStops = list.length;
+        const dwellTotal = Math.max(0, (nStops - 1) * DWELL_TIME);
+        const runTime = Math.max(1, tripDur - dwellTotal);
+
+        const stIndex = list.indexOf(st);
+
+        const arriveRun  = (st.dist / r.total) * runTime;
+        const arriveReal = arriveRun + Math.max(0, (stIndex - 1)) * DWELL_TIME;
+
+        if (tRel >= arriveReal + DWELL_TIME) continue;
+
+        secondsLeft = Math.max(0, arriveReal - tRel);
+
+      } else {
+        let untilStart = tr._t0 - tNow;
+        if (untilStart < 0) untilStart += DAY;
+
+        const tripDur = (tr._t1 - tr._t0);
+        const nStops = list.length;
+
+        const dwellTotal = Math.max(0, (nStops - 2) * DWELL_TIME);
+        const runTime = Math.max(1, tripDur - dwellTotal);
+
+        const stIndex = list.indexOf(st);
+        const arriveRun  = (st.dist / r.total) * runTime;
+        const arriveReal = arriveRun + Math.max(0, (stIndex - 1)) * DWELL_TIME;
+
+        secondsLeft = untilStart + arriveReal;
+      }
+
+      if (secondsLeft < 0 || secondsLeft > FAR_HORIZON) continue;
+
+      const fmt = formatMinsSmart(secondsLeft);
+
+      const cand = {
+        vozilo,
+        linija: tr.linija,
+        smjer: destFromRouteKey(rk),
+        label: fmt.label,
+        sortMin: fmt.sortMin,
+        secondsLeft
+      };
+
+      if (!bestOne || cand.secondsLeft < bestOne.secondsLeft) {
+        bestOne = cand;
+      }
+    }
+  }
+
+  return bestOne; // ili null
+}
 
   function buildGraphForRoute(routeKey) {
     const nodes = new Map();
@@ -798,7 +867,6 @@ function arrivalsForStation(stationId, tNow) {
     // safety: total = zadnji kumulativ
 total = cum[cum.length - 1] || total;
 
-
     const out = { poly, cum, total };
     routeCache.set(key, out);
     return out;
@@ -861,7 +929,6 @@ function makeVehicleIcon(label, angleDeg, showArrow, color) {
   // Krug (badge)
 const cx = 33, cy = 33; 
 const r  = 16.5;          // radijus kruga (po želji 17–20)
-
 
   // Strelica (offset + veličina)
   const gap = -2;          // koliko je odmaknuta od elipse (povećaj za veći razmak)
@@ -929,43 +996,70 @@ const DEST_DISPLAY_OVERRIDE = {
   }
 };
 
-
   // Preko po LINJI + KRAJNJEM ODREDIŠTU
 // ključ: linija -> odredište -> tekst
 const VIA_BY_DEST = {
   '1': {
-    'KRŠTELICA':   '(Bazana — Boboška)',
-    'DUBRAVA':  '(Boboška — Bili Brig)'
+    'TOPANA':   '(Boboška — Bazana)',
+    'KRŠTELICA':  '(Bazana — Boboška)'
   },
   '2': {
-    'KRŠTELICA': '(Gomilice — Krištelica)',
-    'PEŠIJA':    '(Krištelica, Gomilice)'
+    'PERINUŠA': '(Radovanj — Kvartir)',
+    'BRIŽINE':    '(Kvartir — Radovanj)'
   },
   '3': {
-    'PRISPA':    '(Boboška — Otok)',
-    'KRŠTELICA': '(Otok — Boboška)'
+    'PRISPA': '(Mokri Dolac — Krištelica)',
+    'RIČINA': '(Krištelica — Mokri Dolac)'
   },
   '4': {
-    'PRISPA':    '(Krištelica — Bili Brig)',
-    'GOMILICE':  '(Bili Brig — Krištelica)'
+    'POLJANICE':    '(Lukovac — Krenica)',
+    'BOBOŠKA':  '(Krenica — Lukovac)'
   },
   '5': {
     'GOMILICE':  '(Prispa — Otok)',
-    'POLJANICE': '(Otok, Prispa)'
+    'POLJANICE': '(Otok — Prispa)'
   },
-  'P1': {
-    'POLJANICE': '(Boboška — Otok)',
-    'KRŠTELICA': '(Otok — Boboška)'
+    '6': {
+    'PODI':  '(Đirada — Kvartir)',
+    'KAMENMOST': '(Kvartir — Đirada)'
   },
-  'P2': {
-    'PRISPA': '(Krištelica — Bili Brig)',
-    'PEŠIJA':  '(Bili Brig — Krištelica)'
-  }
+      '7': {
+    'PERINUŠA':  '(Vilenice — Dunduša)',
+    'GAJ': '(Dunduša — Vilenice)'
+  },
+    '8': {
+    'GAJ':  '(Kvartir — Podpazar)',
+    'PODI': '(Podpazar — Kvartir)'
+  },
+     '9': {
+    'TOPANA':  '(Perišovac — Vilenice)',
+    'BILUŠINE': '(Vilenice — Perišovac)'
+  },
+       '10': {
+    'KRŠTELICA':  '(Boboška — Otok)',
+    'PRISPA': '(Otok — Boboška)'
+  },
+       '11': {
+    'POLJANICE':  '(Boboška — Bili Brig)',
+    'GOMILICE': '(Bili Brig — Boboška)'
+  },
+       '12': {
+    'PEŠIJA':  '(Prispa — Otok)',
+    'DUBRAVA': '(Otok — Prispa)'
+  },
+       '13': {
+    'MOKRI DOLAC':  '(Vojuša — Meljakuša)',
+    'RIČINA': '(Meljakuša — Vojuša)'
+  },
+       '14': {
+    'MELJAKUŠA':  '(Banovo — Topala)',
+    'RADOVANJ': '(Topala — Banovo)'
+  },
+       '15': {
+    'BRIG':  '(Mokri Dolac — Gajevac)',
+    'MELJAKUŠA': '(Gajevac — Mokri Dolac)'
+  },
 };
-
-
-
-
 
   function destFromRouteKey(routeKey) {
   if (!routeKey) return '';
@@ -1020,7 +1114,6 @@ const viaText = via
 
 
 
-
   // --- 1. RED: "2 PEŠIJA"
   // --- 1. RED: "3 PRISPA" (ZET stil)
   const displayLine = displayLineForVehicle(tr, state.routeKey);
@@ -1059,7 +1152,6 @@ transparent 1.25px
 
 
 
-
       background-image: radial-gradient(circle, rgba(215,247,180,0.98) 0 1.35px, transparent 1.55px);
       background-size: 6px 6px;        /* gustoća točkica (smanji na 5px za gušće) */
       background-position: 0 0;
@@ -1094,7 +1186,6 @@ transparent 1.25px
 
 
 
-
   // --- minute (0 → "manje od 1 min.")
  let minsLabel = '?';
 if (typeof state.secondsLeft === 'number') {
@@ -1114,7 +1205,6 @@ if (state.mode === 'moving') {
   }
 }
 
-
   // --- 3. RED: sljedeća stanica (NE DIRAMO)
   // --- 3. RED: ikona tramvaja (emoji) umjesto teksta
 // --- 3. RED: sljedeća stanica + mala ikona
@@ -1131,7 +1221,6 @@ const line3 =
       </div>
     `
     : '';
-
 
 
 
@@ -1184,6 +1273,9 @@ RD:'Radovanj'
 
   const div = document.createElement('div');
   div.id = 'betaFilter';
+  if (window.matchMedia('(max-width: 768px)').matches) {
+  div.style.display = 'none';
+}
 div.style.position = 'absolute';
 div.style.top = '12px';
 div.style.left = '12px';
@@ -1263,15 +1355,25 @@ stationSel.addEventListener('change', () => {
   let popupTimer = null;
 
   function updatePopup() {
-    const arr = arrivalsForStation(id, nowSec());
+const arr = arrivalsForStation(id, nowSec());
 
-    const html =
-      `<b>${st.name}</b><hr style="margin:4px 0">` +
-      (arr.length
-        ? arr.map(a =>
-            `${a.linija} ${a.smjer} (${a.label})`
-          ).join('<br>')
-        : 'Nema skorih dolazaka');
+let linesHtml = '';
+
+if (arr.length) {
+  // ✅ standard: svi u 10 min
+  linesHtml = arr.map(a => `${a.linija} ${a.smjer} (${a.label})`).join('<br>');
+} else {
+  // ✅ fallback: pokaži samo 1 ako je unutar 60 min
+  const one = nextArrivalWithin60Min(id, nowSec());
+  if (one) {
+    linesHtml = `${one.linija} ${one.smjer} (${one.label})`;
+  } else {
+    linesHtml = 'Nema skorih dolazaka';
+  }
+}
+
+const html =
+  `<b>${st.name}</b><hr style="margin:4px 0">` + linesHtml;
 
     if (!m.getPopup()) {
       m.bindPopup(html, { autoClose: true, closeOnClick: false }).openPopup();
@@ -1457,7 +1559,6 @@ const lastActiveT0ByVehicle = new Map();
 const lastPosByVehicle = new Map();
 
 
-
   function render() {
     const t = nowSec();
 
@@ -1490,11 +1591,9 @@ for (let i = arr.length - 1; i >= 0; i--) {
 
 
 
-
       // 1) filtriraj tripove po prometnim pravilima (za OVAJ trenutak)
 const arrAllowed = arr.filter(tr => tripAllowedNow(tr, t));
 const arrService = arrAllowed;
-
 
 
       const lastRealTrip = arr[arr.length - 1] || null;
@@ -1520,7 +1619,6 @@ if (!arrAllowed.length && !activeAny) {
     }
     continue;
   }
-
 
 
 
@@ -1572,7 +1670,6 @@ if (!prev && !next) {
 }
 
 
-
     const lastKey =
       lastRouteKeyByVehicle.get(vozilo) ||
       pickRouteKeyForTrip(lastFinished);
@@ -1603,7 +1700,6 @@ if (!prev && !next) {
 }
 
 
-
       // 3) active također samo u dopuštenim
 let active = null;
 for (let i = arr.length - 1; i >= 0; i--) {
@@ -1613,7 +1709,6 @@ if (isActiveTrip(tr, t)) {
   break;
 }
 }
-
 
 
 if (active) {
@@ -1637,10 +1732,8 @@ if (active) {
     if (rk) lastRouteKeyByVehicle.set(vozilo, rk);
   }
 
-
   const r = rk ? buildRoute(rk) : null;
   trForLabel = active;
-
 
 let frac = 0;
 
@@ -1661,7 +1754,6 @@ const dwellTotal = Math.max(0, (nStops - 2) * DWELL_TIME);
 
   // 1) bazna udaljenost po ruti, kao da nema stajanja, ali sa skraćenim runTime
   let distNow = (tRel / (active._t1 - active._t0)) * r.total;
-
 
   // 2) ako imamo stanice, uvedi “stajanje” tako da u tim prozorima dist ostane na stanici
   if (stationDists && nStops >= 2) {
@@ -1716,7 +1808,6 @@ const dwellTotal = Math.max(0, (nStops - 2) * DWELL_TIME);
   showArrow = true;
 }
 
-
         // FORSIRAJ strelicu u vožnji
         showArrow = true;
 
@@ -1732,7 +1823,6 @@ popupState = {
 
   nextStopName: nextStop ? nextStop.name : null
 };
-
 
 } else if (prev && t >= prev._t1 && (!next || t < next._t0)) {
 
@@ -1779,7 +1869,6 @@ if (!prevEndsDepot) {
 }
 
 
-
   // 🏠 SPREMIŠTE → vidljivo još DEPOT_POST nakon dolaska
   else if (prevEndsDepot && t <= prev._t1 + DEPOT_POST) {
     pos = endPos;
@@ -1824,7 +1913,6 @@ if (!prevEndsDepot) {
     }
   }
 }
-
 
       else if (!prev && next) {
         rk = pickRouteKeyForTrip(next);
@@ -1875,7 +1963,6 @@ if (!pos || !trForLabel || !popupState) {
 
 
 
-
 // 🔥 filtriranje po liniji (uključi i spremišne varijante tipa 9S)
 if (selectedLine) {
 
@@ -1904,7 +1991,6 @@ const ic = makeVehicleIcon(labelLine, ang, arrowFinal, iconColor);
 if (isSelected && (popupState.networkRouteKey || popupState.routeKey)) {
   highlightNetwork(popupState.networkRouteKey || popupState.routeKey);
 }
-
 
       if (!existing) {
 const m = L.marker(pos, {
@@ -1977,7 +2063,6 @@ filter.style.bottom = '10px';
 filter.style.transform = 'translateX(-50%)';
 filter.style.width = '92%';
 filter.style.maxWidth = '420px';
-
 
 
     // napravi tramvaj ikonu
