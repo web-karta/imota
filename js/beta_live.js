@@ -380,7 +380,7 @@ function formatMinsSmart(secondsLeft) {
 'Bilušine':'BIL',
 'Đardin':'DJ',
 'Perinuša':'PER',
-'Brižine':'R',
+'Rastovača':'R',
 'Boboška':'B',
 'Kamenmost':'KM',
 'Podi':'PD',
@@ -983,7 +983,7 @@ const baseY = cy - r - gap;
   /* ================= POPUP CONTENT ================= */
 
   const DEST_LABEL = { PS: 'PEŠIJA', D: 'DUBRAVA', K: 'KRŠTELICA', P: 'PRISPA', GO: 'GOMILICE', PO: 'POLJANICE', S: 'SPREMIŠTE PRISPA' ,
-    T:'TOPANA', RI:'RIČINA', O:'OPAČAC', BIL:'BILUŠINE', DJ: 'ĐARDIN', PER: 'PERINUŠA', R: 'BRIŽINE', B: 'BOBOŠKA', KM: 'KAMENMOST', PD: 'PODI', G: 'Gaj', M: 'MOKRI DOLAC', ME: 'MELJAKUŠA', RD: 'RADOVANJ', BR: 'BRIG'
+    T:'TOPANA', RI:'RIČINA', O:'OPAČAC', BIL:'BILUŠINE', DJ: 'ĐARDIN', PER: 'PERINUŠA', R: 'RASTOVAČA', B: 'BOBOŠKA', KM: 'KAMENMOST', PD: 'PODI', G: 'GAJ', M: 'MOKRI DOLAC', ME: 'MELJAKUŠA', RD: 'RADOVANJ', BR: 'BRIG'
   };
 
   // === DISPLAY OVERRIDES (samo za prikaz, ne za logiku!) ===
@@ -1005,7 +1005,7 @@ const VIA_BY_DEST = {
   },
   '2': {
     'PERINUŠA': '(Radovanj — Kvartir)',
-    'BRIŽINE':    '(Kvartir — Radovanj)'
+    'RASTOVAČA':    '(Kvartir — Radovanj)'
   },
   '3': {
     'PRISPA': '(Mokri Dolac — Krištelica)',
@@ -1251,7 +1251,7 @@ BR:'Brig',
 BIL:'Bilušine',
 DJ:'Đardin',
 PER:'Perinuša',
-R:'Brižine',
+R:'Rastovača',
 B:'Boboška',
 KM:'Kamenmost',
 PD:'Podi',
