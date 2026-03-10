@@ -1,6 +1,50 @@
-// beta_live.js
 (function () {
   'use strict';
+
+function tramAnnouncement(linija, smjer, sljedecaStanica, jePosljednjaStanica, secondsLeft) {
+
+  let tekst = "Linija " + linija + ", smjer " + smjer + ".";
+
+  // 🚋 VOZILO U VOŽNJI
+  if (sljedecaStanica) {
+
+    if (jePosljednjaStanica) {
+      tekst += " Sljedeća je stanica " + sljedecaStanica + ", ujedno i posljednja stanica na trasi.";
+    } else {
+      tekst += " Sljedeća je stanica " + sljedecaStanica + ".";
+    }
+
+  }
+
+  // 🕒 VOZILO STOJI NA OKRETIŠTU / SPREMIŠTU
+  else if (typeof secondsLeft === "number") {
+
+    if (secondsLeft < 60) {
+      tekst += " Vozilo polazi za manje od jedne minute.";
+    } 
+    else {
+      const min = Math.round(secondsLeft / 60);
+
+      if (min === 1) {
+        tekst += " Vozilo polazi za jednu minutu.";
+      } else if (min === 2) {
+        tekst += " Vozilo polazi za dvije minute.";
+      } else if (min === 3 || min === 4) {
+        tekst += " Vozilo polazi za " + min + " minute.";
+      } else {
+        tekst += " Vozilo polazi za " + min + " minuta.";
+      }
+    }
+
+  }
+
+  const govor = new SpeechSynthesisUtterance(tekst);
+  govor.lang = "hr-HR";
+  govor.rate = 0.75;
+
+  speechSynthesis.cancel();
+  speechSynthesis.speak(govor);
+}
 
   const DATA = window.BETA_DATA || {};
   if (!DATA.REDOSLIJED_TXT || !DATA.POLASCI_TXT) {
@@ -539,6 +583,14 @@ function getNextStopByDistance(routeKey, currentDistMeters) {
     }
   }
   return null; // na kraju rute (nema sljedeće)
+}
+
+function isFinalStopOnRoute(routeKey, stopObj) {
+  const list = getRouteStationDistances(routeKey);
+  if (!list || !list.length || !stopObj) return false;
+
+  const last = list[list.length - 1];
+  return String(last.id) === String(stopObj.id);
 }
 
 function arrivalsForStation(stationId, tNow) {
@@ -1558,6 +1610,13 @@ const lastActiveT0ByVehicle = new Map();
 // pamti zadnju POZNATU POZICIJU po vozilu (bitno za liniju 5)
 const lastPosByVehicle = new Map();
 
+function setMarkerLiveState(marker, vozilo, trForLabel, popupState) {
+  marker._betaLiveState = {
+    vozilo,
+    trForLabel,
+    popupState
+  };
+}
 
   function render() {
     const t = nowSec();
@@ -1811,17 +1870,19 @@ const dwellTotal = Math.max(0, (nStops - 2) * DWELL_TIME);
         // FORSIRAJ strelicu u vožnji
         showArrow = true;
 
- const distNow = (r && r.total > 0) ? (frac * r.total) : 0;
+const distNow = (r && r.total > 0) ? (frac * r.total) : 0;
 const nextStop = (rk && r && r.total > 0) ? getNextStopByDistance(rk, distNow) : null;
+const nextStopIsFinal = nextStop ? isFinalStopOnRoute(rk, nextStop) : false;
 
 popupState = {
   mode: 'moving',
   secondsLeft: (active._t1 - t),
 
-  routeKey: rk,          // tekst = normalno odredište
-  networkRouteKey: rk,   // ruta = ista
+  routeKey: rk,
+  networkRouteKey: rk,
 
-  nextStopName: nextStop ? nextStop.name : null
+  nextStopName: nextStop ? nextStop.name : null,
+  nextStopIsFinal: nextStopIsFinal
 };
 
 } else if (prev && t >= prev._t1 && (!next || t < next._t0)) {
@@ -1998,24 +2059,45 @@ const m = L.marker(pos, {
   pane: 'vehiclePane'
 }).addTo(layer);
         m.bindPopup(popupHtml(trForLabel, popupState));
+        setMarkerLiveState(m, vozilo, trForLabel, popupState);
 
-m.on('click', (ev) => {
+m.on('click', function (ev) {
   L.DomEvent.stopPropagation(ev);
-  selectedVehicleId = vozilo;
 
+  const live = this._betaLiveState || {};
+  const liveVozilo = live.vozilo || vozilo;
+  const liveTrip = live.trForLabel || trForLabel;
+  const livePopup = live.popupState || popupState;
+
+  selectedVehicleId = liveVozilo;
   selectedRouteKey =
-    popupState.networkRouteKey || popupState.routeKey || null; // ⬅️ BITNO
+    livePopup?.networkRouteKey || livePopup?.routeKey || null;
 
   if (selectedRouteKey) highlightNetwork(selectedRouteKey);
+
+const rkNow = livePopup?.routeKey || '';
+const linija = displayLineForVehicle(liveTrip, rkNow);
+const smjer = destFromRouteKey(rkNow);
+const sljedecaStanica = livePopup?.nextStopName || null;
+const jePosljednjaStanica = !!livePopup?.nextStopIsFinal;
+
+tramAnnouncement(
+  linija,
+  smjer,
+  sljedecaStanica,
+  jePosljednjaStanica,
+  livePopup?.secondsLeft
+);
   render();
-  m.openPopup();
+  this.openPopup();
 });
 
         markers.set(vozilo, m);
       } else {
-        existing.setLatLng(pos);
-        existing.setIcon(ic);
-        existing.setPopupContent(popupHtml(trForLabel, popupState));
+ existing.setLatLng(pos);
+existing.setIcon(ic);
+existing.setPopupContent(popupHtml(trForLabel, popupState));
+setMarkerLiveState(existing, vozilo, trForLabel, popupState);
       }
     }
   }
