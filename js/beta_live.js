@@ -129,22 +129,22 @@ function isDepotEnd(routeKey) {
   ]);
 
   // 🚋 NEDJELJNI / POSEBNI REŽIM
-const SUNDAY_ALLOWED_LINES = new Set(['1','2','3','4']);
+const SUNDAY_ALLOWED_LINES = new Set(['1','2','3','4','5']);
 
 const SUNDAY_ALLOWED_VEHICLES = new Set([
-  '11','12','14','21','23','31','33','43','45'
+  '11','12','14','21','23','31','33','41','45','52','54'
 ]);
 
   // Vozila koja NE VOZE SUBOTOM (samo dnevne linije)
 const SATURDAY_DISABLED_VEHICLES = new Set([
-  '52',
   '62',
   '72',
+  '82',
   '92',
+  '102',
   '112',
-  '122',
-    '132',
-      '152',
+    '122',
+      '132'
 
 
 ]);
