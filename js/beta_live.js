@@ -3,6 +3,9 @@
 
 function tramAnnouncement(linija, smjer, sljedecaStanica, jePosljednjaStanica, secondsLeft) {
 
+  // ukloni početno "S " ako postoji
+  smjer = smjer.replace(/^S\s+/, '');
+
   let tekst = "Linija " + linija + ", smjer " + smjer + ".";
 
   // 🚋 VOZILO U VOŽNJI
@@ -23,8 +26,7 @@ function tramAnnouncement(linija, smjer, sljedecaStanica, jePosljednjaStanica, s
       tekst += " Vozilo polazi za manje od jedne minute.";
     } 
     else {
-      const min = Math.round(secondsLeft / 60);
-
+const min = Math.max(0, Math.round(secondsLeft / 60));
       if (min === 1) {
         tekst += " Vozilo polazi za jednu minutu.";
       } else if (min === 2) {
@@ -37,13 +39,32 @@ function tramAnnouncement(linija, smjer, sljedecaStanica, jePosljednjaStanica, s
     }
 
   }
+speechSynthesis.onvoiceschanged = () => {};
+const govor = new SpeechSynthesisUtterance(tekst);
+govor.lang = "hr-HR";
+govor.rate = 0.75;
 
-  const govor = new SpeechSynthesisUtterance(tekst);
-  govor.lang = "hr-HR";
-  govor.rate = 0.75;
+function pickMaleVoice() {
+  const voices = speechSynthesis.getVoices();
 
-  speechSynthesis.cancel();
-  speechSynthesis.speak(govor);
+  // traži hrvatski muški glas
+  let v =
+    voices.find(v => v.lang === "hr-HR" && /male|ivan|marko|croatian/i.test(v.name)) ||
+
+    // fallback: bilo koji hrvatski
+    voices.find(v => v.lang === "hr-HR") ||
+
+    // fallback: bilo koji muški
+    voices.find(v => /male/i.test(v.name));
+
+  return v || null;
+}
+
+const voice = pickMaleVoice();
+if (voice) govor.voice = voice;
+
+speechSynthesis.cancel();
+speechSynthesis.speak(govor);
 }
 
   const DATA = window.BETA_DATA || {};
@@ -84,23 +105,15 @@ const DWELL_TIME = 2;
 
 // tolerancija (u metrima) za “uhvati stanicu”
 const STOP_EPS = 10;
-
-  function isDepotEnd(routeKey) {
-    // dolazak u spremište kad je odredište S (npr. "...-S")
-    return /-S$/.test(routeKey || '');
-  }
+function isDepotEnd(routeKey) {
+  // dolazak u spremište: -S ili -SP
+  return /-(S|SP)$/.test(routeKey || '');
+}
 
   const nowSec = () => {
     const d = new Date();
     return d.getHours() * 3600 + d.getMinutes() * 60 + d.getSeconds();
   };
-
-  //function isNightNow(d = new Date()) {
-  //const h = d.getHours();
- // return (h >= 22 || h < 5); // ← prilagodi ako želiš
-//}
-
-    /* ================= SERVICE CALENDAR (PROMETNA PRAVILA) ================= */
 
   // Posebni dani (vrijedi svake godine) – format "MM-DD"
   const SPECIAL_MD = new Set([
@@ -192,10 +205,6 @@ const VEH_WEEKDAYS_ONLY = new Set([
   'B102','B202','B302','B402','B502'
 ]);
 
-//const VEH_NIGHT_ONLY = new Set([
-  //'B602','B702'
-//]);
-
 const VEH_SPECIAL_ONLY = new Set([
   'B802','B902'
 ]);
@@ -279,19 +288,6 @@ if (isSunOrSpecial) {
     return false;
   }
 
-  function minsUntil(secFuture, tNow) {
-    let diff = secFuture - tNow;
-    if (diff < 0) diff += DAY;
-    return Math.max(0, Math.round(diff / 60));
-  }
-
-  function formatClock(t) {
-    const h = Math.floor(t / 3600);
-    const m = Math.floor((t % 3600) / 60);
-    const s = Math.floor(t % 60);
-    return `${pad2(h)}:${pad2(m)}:${pad2(s)}`;
-  }
-
   // ===== PAMETNO ZAOKRUŽIVANJE MINUTA =====
 function formatMinsSmart(secondsLeft) {
   if (secondsLeft <= 30) {
@@ -344,16 +340,23 @@ function formatMinsSmart(secondsLeft) {
     firstDataSeen = true;
 
     // novi format: 4 stupca
-    if (p.length >= 4 && p[2]) {
-      const key = p[0];
-      const ids = p[2].split(',').map(s => s.trim()).filter(Boolean);
-      if (key && ids.length) routeStations.set(key, ids);
+if (p.length >= 4) {
+  const key = p[0];
 
-      const st = parsePointWKT(p[1]);
-      const en = parsePointWKT(p[3]);
-      if (st || en) routeEndpoints.set(key, { start: st, end: en });
-      return;
-    }
+  const ids = (p[2] || '')
+    .split(',')
+    .map(s => s.trim())
+    .filter(Boolean);
+
+  // ✔ ruta postoji čak i bez stanica
+  if (key) routeStations.set(key, ids);
+
+  const st = parsePointWKT(p[1]);
+  const en = parsePointWKT(p[3]);
+  if (st || en) routeEndpoints.set(key, { start: st, end: en });
+
+  return;
+}
 
     // stari format: 2 stupca
     if (p.length >= 2) {
@@ -402,52 +405,47 @@ function formatMinsSmart(secondsLeft) {
 
   /* ================= ROUTE KEY PICKER ================= */
 
-  const TERM_CODE = {
-    'Pešija': 'PS',
-    'Dubrava': 'D',
-    'Krštelica': 'K',
-    'Prispa': 'P',
-    'Gomilice': 'GO',
-    'Poljanice': 'PO',
-    'Spremište': 'S',
+const TERM_CODE = {
+  'Pešija': 'PS',
+  'Dubrava': 'D',
+  'Krštelica': 'K',
+  'Prispa': 'P',
+  'Gomilice': 'GO',
+  'Poljanice': 'PO',
+  'Spremište': 'S',
+    'Cista Provo':'CP',
+  'Otok': 'S',
+  'Centar': 'S',
+  'Kamenice': 'S',
+  'Spremiste': 'S',
 
-    // aliasi iz POLASCI (da ne pada routeKey picker)
-    'Otok': 'S',
-    'Centar': 'S',
-    'Kamenice': 'S',
-    'Spremiste': 'S',
-    // === NOVA OKRETIŠTA ===
-'Topana':'T',
-'Ričina':'RI',
-'Opačac':'O',
-'Brig':'BR',
-'Bilušine':'BIL',
-'Đardin':'DJ',
-'Perinuša':'PER',
-'Rastovača':'R',
-'Boboška':'B',
-'Kamenmost':'KM',
-'Podi':'PD',
-'Gaj':'G',
-'Mokri Dolac':'M',
-'Meljakuša':'ME',
-'Radovanj':'RD'
-  };
+  'Topana':'T',
+  'Ričina':'RI',
+  'Opačac':'O',
+  'Brig':'BR',
+  'Razdolje':'RAZ',
+  'Bilušine':'BIL',
+  'Đardin':'DJ',
+  'Perinuša':'PER',
+  'Rastovača':'R',
+  'Boboška':'B',
+  'Kamenmost':'KM',
+  'Podi':'PD',
+  'Gaj':'G',
+  'Mokri Dolac':'M',
+  'Meljakuša':'ME',
+  'Lukovac':'LUK',
+  'Radovanj':'RD',
+  'Krenica':'KR',
+  'Podrinica':'POD',
+    'Spremište Perinuša':'SP',
+
+  'Vojuša':'V',
+  'Osoje':'OS'
+};
 
   function pickRouteKeyForTrip(trip) {
- // === IZNIMKA DEFINIRANA PODACIMA ===
-//if (
-  //trip.red === 'dnevni_iznimka' &&
- // trip.linija === '4' &&
-  //trip.smjer === 'od' &&
- // trip.okretište === 'Gomilice'
-//) {
-  //return '4_G-PR_DEPOT';
-//}
 
-    // === 0) EKSPPLICITNA DEPOT / IZNIMNA RUTA IZ POLASCI.TXT ===
-  // Ako je u stupcu "red" naveden točan routeKey (npr. 4_G-PR_DEPOT),
-  // i on postoji u Redoslijed.txt → koristi ga bez ikakve daljnje logike
   if (trip.red) {
     const rk = String(trip.red).trim();
     if (routeStations.has(rk)) {
@@ -492,10 +490,29 @@ function formatMinsSmart(secondsLeft) {
   const exact = candidates.find(k => k.endsWith('-' + code));
   return exact || null;
 }
- if (smjer.includes('od')) {
-  // ✔️ mora počinjati točno s line + '_' + code + '-'
-  const exact = candidates.find(k => k.startsWith(line + '_' + code + '-'));
-  return exact || null;
+if (smjer.includes('od')) {
+
+  const matches = candidates.filter(k => k.startsWith(line + '_' + code + '-'));
+
+  if (!matches.length) return null;
+  if (matches.length === 1) return matches[0];
+
+  // pokušaj pogoditi rutu po odredištu iz routeKey
+  const destMatch = matches.find(k => {
+    const m = /-([A-Z0-9]+)$/.exec(k);
+    if (!m) return false;
+
+    const destCode = m[1];
+    const destName = DEST_LABEL[destCode] || '';
+
+    return smjer.includes(destName.toLowerCase());
+  });
+
+  if (destMatch) return destMatch;
+
+  // fallback
+  return matches[0];
+
 }
     }
 
@@ -520,8 +537,7 @@ function formatMinsSmart(secondsLeft) {
   }
 
   // ide IZ spremišta ili normalna vožnja → makni eventualni S-sufiks
-  return String(tr.linija || '').replace(/S$/, '');
-}
+return String(tr.linija || '').replace(/[A-Z]$/, '');}
 
   /* ================= ROUTE (TRACK-FOLLOWING via network graph) ================= */
 
@@ -770,45 +786,64 @@ function nextArrivalWithin60Min(stationId, tNow) {
 
   return bestOne; // ili null
 }
+function reverseRouteKey(routeKey) {
+  const m = /^(.+?)_([A-Z0-9]+)-([A-Z0-9]+)$/.exec(String(routeKey || ''));
+  if (!m) return routeKey;
+  return `${m[1]}_${m[3]}-${m[2]}`;
+}
 
-  function buildGraphForRoute(routeKey) {
-    const nodes = new Map();
-    function ensureNode(latlng) {
-      const k = nodeKey(latlng);
-      if (!nodes.has(k)) nodes.set(k, { latlng, edges: [] });
-      return k;
-    }
+ function buildGraphForRoute(routeKey) {
+  const nodes = new Map();
 
-    const feats = (json_TramvajskamreaopineGrude_1.features || []);
-    for (const f of feats) {
-      const segs = String(f.properties?.Segmenti ?? '');
-      const segList = segs.split(',').map(s => s.trim()).filter(Boolean);
-      if (!segList.includes(routeKey)) continue;
-
-      const geom = f.geometry;
-      if (!geom) continue;
-
-      let coords = [];
-      if (geom.type === 'LineString') coords = geom.coordinates;
-      else if (geom.type === 'MultiLineString') coords = geom.coordinates.flat();
-      if (!coords.length) continue;
-
-      const latlngs = coords.map(c => [c[1], c[0]]);
-      const a = latlngs[0];
-      const b = latlngs[latlngs.length - 1];
-
-      const ka = ensureNode(a);
-      const kb = ensureNode(b);
-
-      let w = 0;
-      for (let i = 1; i < latlngs.length; i++) w += hav(latlngs[i - 1], latlngs[i]);
-
-      nodes.get(ka).edges.push({ to: kb, coords: latlngs, w });
-      nodes.get(kb).edges.push({ to: ka, coords: latlngs.slice().reverse(), w });
-    }
-    return nodes;
+  function ensureNode(latlng) {
+    const k = nodeKey(latlng);
+    if (!nodes.has(k)) nodes.set(k, { latlng, edges: [] });
+    return k;
   }
 
+  const rawLine = String(routeKey || '').split('_')[0];
+  const baseLine = rawLine.replace(/S$/, '');
+  const reverseKey = reverseRouteKey(routeKey);
+
+  const feats = (json_TramvajskamreaopineGrude_1.features || []);
+  for (const f of feats) {
+    const segs = String(f.properties?.Segmenti ?? '');
+    const segList = segs.split(',').map(s => s.trim()).filter(Boolean);
+
+    // normalno: traži exact routeKey
+    // posebna iznimka za liniju 5: dopusti i obrnuti key
+    const hasRoute =
+      segList.includes(routeKey) ||
+      (baseLine === '5' && segList.includes(reverseKey));
+
+    if (!hasRoute) continue;
+
+    const geom = f.geometry;
+    if (!geom) continue;
+
+    let coords = [];
+    if (geom.type === 'LineString') coords = geom.coordinates;
+    else if (geom.type === 'MultiLineString') coords = geom.coordinates.flat();
+    if (!coords.length) continue;
+
+    const latlngs = coords.map(c => [c[1], c[0]]);
+    const a = latlngs[0];
+    const b = latlngs[latlngs.length - 1];
+
+    const ka = ensureNode(a);
+    const kb = ensureNode(b);
+
+    let w = 0;
+    for (let i = 1; i < latlngs.length; i++) {
+      w += hav(latlngs[i - 1], latlngs[i]);
+    }
+
+    nodes.get(ka).edges.push({ to: kb, coords: latlngs, w });
+    nodes.get(kb).edges.push({ to: ka, coords: latlngs.slice().reverse(), w });
+  }
+
+  return nodes;
+}
   function nearestNodeKey(nodes, targetLatLng) {
     let bestK = null, bestD = Infinity;
     for (const [k, n] of nodes.entries()) {
@@ -863,27 +898,63 @@ function nextArrivalWithin60Min(stationId, tNow) {
     return edges;
   }
 
-  function buildRoute(key) {
-    if (routeCache.has(key)) return routeCache.get(key);
+function buildRoute(key) {
+  if (routeCache.has(key)) return routeCache.get(key);
 
-    const stIds = routeStations.get(key);
-    if (!stIds || stIds.length < 2) return null;
+  const stIds = routeStations.get(key) || [];
 
-    const nodes = buildGraphForRoute(key);
-    if (!nodes || nodes.size === 0) return null;
+  const rawLine = String(key || '').split('_')[0];
+  const baseLine = rawLine.replace(/S$/, '');
+  const isLine5 = baseLine === '5';
 
-    // Waypoints: [START POINT?] + stanice + [END POINT?]
-    const ep = routeEndpoints.get(key) || {};
-    const waypoints = [];
+  // za liniju 5 dopuštamo rutu bez stanica
+  if (!isLine5 && (!stIds || stIds.length < 2)) return null;
 
-    if (ep.start) waypoints.push(ep.start);
+  const nodes = buildGraphForRoute(key);
+  if (!nodes || nodes.size === 0) return null;
 
-    for (const id of stIds) {
-      const st = stationById.get(String(id));
-      if (st?.latlng) waypoints.push(st.latlng);
+  const ep = routeEndpoints.get(key) || {};
+  const waypoints = [];
+
+if (ep.start) waypoints.push(ep.start);
+
+if (!isLine5) {
+  for (const id of stIds) {
+    const st = stationById.get(String(id));
+    if (st?.latlng) waypoints.push(st.latlng);
+  }
+}
+
+if (ep.end) waypoints.push(ep.end);
+
+// očisti uzastopne i "ping-pong" waypoint-e: A-B-A
+const cleanedWaypoints = [];
+for (const wp of waypoints) {
+  if (!wp) continue;
+
+  if (!cleanedWaypoints.length) {
+    cleanedWaypoints.push(wp);
+    continue;
+  }
+
+  const last = cleanedWaypoints[cleanedWaypoints.length - 1];
+
+  // preskoči isti waypoint dvaput zaredom
+  if (hav(last, wp) < 5) continue;
+
+  // preskoči A-B-A oscilaciju
+  if (cleanedWaypoints.length >= 2) {
+    const prev = cleanedWaypoints[cleanedWaypoints.length - 2];
+    if (hav(prev, wp) < 5) {
+      continue;
     }
+  }
 
-    if (ep.end) waypoints.push(ep.end);
+  cleanedWaypoints.push(wp);
+}
+
+waypoints.length = 0;
+waypoints.push(...cleanedWaypoints);
 
     if (waypoints.length < 2) return null;
 
@@ -898,13 +969,30 @@ function nextArrivalWithin60Min(stationId, tNow) {
       const goalK = nearestNodeKey(nodes, B);
       if (!startK || !goalK) continue;
 
-      const edges = dijkstra(nodes, startK, goalK);
-      if (!edges) continue;
+const edges = dijkstra(nodes, startK, goalK);
+if (!edges || !edges.length) continue;
 
-      for (const e of edges) {
-        if (!poly.length) poly = poly.concat(e.coords);
-        else poly = poly.concat(e.coords.slice(1));
-      }
+// 🔒 spriječi vraćanje na isti segment
+for (const e of edges) {
+
+  const coords = e.coords;
+
+  if (!poly.length) {
+    poly = poly.concat(coords);
+  } else {
+
+    const last = poly[poly.length - 1];
+    const first = coords[0];
+
+    // ako je isti čvor → preskoči prvi
+    if (last[0] === first[0] && last[1] === first[1]) {
+      poly = poly.concat(coords.slice(1));
+    } else {
+      poly = poly.concat(coords);
+    }
+
+  }
+}
     }
 
     if (poly.length < 2) return null;
@@ -1034,9 +1122,38 @@ const baseY = cy - r - gap;
 
   /* ================= POPUP CONTENT ================= */
 
-  const DEST_LABEL = { PS: 'PEŠIJA', D: 'DUBRAVA', K: 'KRŠTELICA', P: 'PRISPA', GO: 'GOMILICE', PO: 'POLJANICE', S: 'SPREMIŠTE PRISPA' ,
-    T:'TOPANA', RI:'RIČINA', O:'OPAČAC', BIL:'BILUŠINE', DJ: 'ĐARDIN', PER: 'PERINUŠA', R: 'RASTOVAČA', B: 'BOBOŠKA', KM: 'KAMENMOST', PD: 'PODI', G: 'GAJ', M: 'MOKRI DOLAC', ME: 'MELJAKUŠA', RD: 'RADOVANJ', BR: 'BRIG'
-  };
+const DEST_LABEL = {
+  PS: 'PEŠIJA',
+  D: 'DUBRAVA',
+  K: 'KRŠTELICA',
+  P: 'PRISPA',
+  GO: 'GOMILICE',
+  PO: 'POLJANICE',
+  S: 'SPREMIŠTE PRISPA',
+  SP: 'SPREMIŠTE PERINUŠA',
+CP: 'CISTA PROVO',
+  T: 'TOPANA',
+  RI: 'RIČINA',
+  O: 'OPAČAC',
+  RAZ: 'RAZDOLJE',
+  BR: 'BRIG',
+  BIL: 'BILUŠINE',
+  DJ: 'ĐARDIN',
+  PER: 'PERINUŠA',
+  R: 'RASTOVAČA',
+  B: 'BOBOŠKA',
+  KM: 'KAMENMOST',
+  PD: 'PODI',
+  G: 'GAJ',
+  M: 'MOKRI DOLAC',
+  ME: 'MELJAKUŠA',
+  RD: 'RADOVANJ',
+  LUK: 'LUKOVAC',
+  KR: 'KRENICA',
+  POD: 'PODRINICA',
+  V: 'VOJUŠA',
+  OS: 'OSOJE'
+};
 
   // === DISPLAY OVERRIDES (samo za prikaz, ne za logiku!) ===
 const DEST_DISPLAY_OVERRIDE = {
@@ -1052,65 +1169,89 @@ const DEST_DISPLAY_OVERRIDE = {
 // ključ: linija -> odredište -> tekst
 const VIA_BY_DEST = {
   '1': {
-    'TOPANA':   '(Boboška — Bazana)',
-    'KRŠTELICA':  '(Bazana — Boboška)'
+    'TOPANA': '(Boboška — Bazana)',
+    'KRŠTELICA': '(Bazana — Boboška)'
   },
   '2': {
     'PERINUŠA': '(Radovanj — Kvartir)',
-    'RASTOVAČA':    '(Kvartir — Radovanj)'
+    'RASTOVAČA': '(Kvartir — Radovanj)'
   },
   '3': {
     'PRISPA': '(Mokri Dolac — Krištelica)',
     'RIČINA': '(Krištelica — Mokri Dolac)'
   },
   '4': {
-    'POLJANICE':    '(Lukovac — Krenica)',
-    'BOBOŠKA':  '(Krenica — Lukovac)'
+    'POLJANICE': '(Krenica — Peć Mlini)',
+    'BOBOŠKA': '(Peć Mlini — Krenica)',
+  },
+    '4A': {
+    'POLJANICE': '(Krenica — Peć Mlini)',
+    'LUKOVAC': '(Peć Mlini — Krenica)',
+  },
+     '4B': {
+    'RAZDOLJE': '(Krenica — Peć Mlini)',
+    'LUKOVAC': '(Peć Mlini — Krenica)',
   },
   '5': {
-    'GOMILICE':  '(Prispa — Otok)',
-    'POLJANICE': '(Otok — Prispa)'
+  'CISTA PROVO': '(Đirada — Prološko Blato)',
+  'PODI': '(Prološko Blato — Đirada)'
   },
-    '6': {
-    'PODI':  '(Đirada — Kvartir)',
-    'KAMENMOST': '(Kvartir — Đirada)'
+  '6': {
+    'ĐARDIN': '(Perišovac — Bazana',
+    'OPAČAC': '(Bazana — Perišovac)'
   },
-      '7': {
-    'PERINUŠA':  '(Vilenice — Dunduša)',
-    'GAJ': '(Dunduša — Vilenice)'
+  '7': {
+    'PERINUŠA': '(Rebića Strana — Kambelovac)',
+    'GAJ': '(Kambelovac — Rebića Strana)'
   },
-    '8': {
-    'GAJ':  '(Kvartir — Podpazar)',
-    'PODI': '(Podpazar — Kvartir)'
+  '8': {
+    'KAMENMOST': '(Kvartir — Kambelovac)',
+    'OPAČAC': '(Kambelovac — Kvartir)'
   },
-     '9': {
-    'TOPANA':  '(Perišovac — Vilenice)',
-    'BILUŠINE': '(Vilenice — Perišovac)'
+  '9': {
+    'TOPANA': '(Perišovac — Bazana)',
+    'BILUŠINE': '(Bazana — Perišovac)'
   },
-       '10': {
-    'KRŠTELICA':  '(Boboška — Otok)',
-    'PRISPA': '(Otok — Boboška)'
+  '10': {
+    'PODRINICA': '(Otok — Boboška)',
+    'PRISPA': '(Boboška — Otok)'
   },
-       '11': {
-    'POLJANICE':  '(Boboška — Bili Brig)',
+  '11': {
+    'POLJANICE': '(Boboška — Bili Brig)',
     'GOMILICE': '(Bili Brig — Boboška)'
   },
-       '12': {
-    'PEŠIJA':  '(Prispa — Otok)',
+  '12': {
+    'PEŠIJA': '(Prispa — Otok)',
     'DUBRAVA': '(Otok — Prispa)'
   },
-       '13': {
-    'MOKRI DOLAC':  '(Vojuša — Meljakuša)',
-    'RIČINA': '(Meljakuša — Vojuša)'
+  '13': {
+    'KRŠTELICA': '(Gomilice — Krištelica)',
+    'PEŠIJA': '(Krištelica — Gomilice)'
   },
-       '14': {
-    'MELJAKUŠA':  '(Banovo — Topala)',
-    'RADOVANJ': '(Topala — Banovo)'
+  '14': {
+    'KRENICA': '(Poljanice — Peć Mlini)',
+    'PRISPA': '(Peć Mlini — Poljanice)'
   },
-       '15': {
-    'BRIG':  '(Mokri Dolac — Gajevac)',
-    'MELJAKUŠA': '(Gajevac — Mokri Dolac)'
+  '15': {
+    'MELJAKUŠA': '(Gajevac — Topala)',
+    'RADOVANJ': '(Topala — Gajevac)'
   },
+  '16': {
+    'RIČINA': '(Rastovača — Meljakuša)',
+    'BRIG': '(Meljakuša — Rastovača)'
+  },
+  '17': {
+    'VOJUŠA': '(Mokri Dolac — Radovanj)',
+    'BRIG': '(Radovanj — Mokri Dolac)'
+  },
+  '18': {
+    'VOJUŠA': '(Virine — Mokri Dolac)',
+    'RASTOVAČA': '(Mokri Dolac — Virine)'
+  },
+  '19': {
+    'OSOJE': '(Meljakuša — Gajevac)',
+    'MOKRI DOLAC': '(Gajevac — Meljakuša)'
+  }
 };
 
   function destFromRouteKey(routeKey) {
@@ -1288,29 +1429,37 @@ function ensureFilterUI() {
   if (document.getElementById('betaFilter')) return;
 
   // mapiranje odredišnih kodova -> puni naziv
-  const DEST_NAME = {
-    PS: 'Pešija',
-    D: 'Dubrava',
-    K: 'Krštelica',
-    PR: 'Prispa',
-    GO: 'Gomilice',
-    PO: 'Poljanice',
-    S: 'Spremište Prispa',
-    T:'Topana',
-RI:'Ričina',
-O:'Opačac',
-BR:'Brig',
-BIL:'Bilušine',
-DJ:'Đardin',
-PER:'Perinuša',
-R:'Rastovača',
-B:'Boboška',
-KM:'Kamenmost',
-PD:'Podi',
-M:'Mokri Dolac',
-ME:'Meljakuša',
-RD:'Radovanj'
-  };
+const DEST_NAME = {
+  PS: 'Pešija',
+  D: 'Dubrava',
+  K: 'Krštelica',
+  P: 'Prispa',
+  GO: 'Gomilice',
+  PO: 'Poljanice',
+  S: 'Spremište Prispa',
+  CP: 'Cista Provo',
+  SP: 'Spremište Perinuša',
+  T:'Topana',
+  RI:'Ričina',
+  O:'Opačac',
+  BR:'Brig',
+  BIL:'Bilušine',
+  DJ:'Đardin',
+  PER:'Perinuša',
+  R:'Rastovača',
+  B:'Boboška',
+  KM:'Kamenmost',
+  PD:'Podi',
+  M:'Mokri Dolac',
+  ME:'Meljakuša',
+  LUK:'Lukovac',
+  RD:'Radovanj',
+  KR:'Krenica',
+  POD:'Podrinica',
+  V:'Vojuša',
+  OS:'Osoje',
+  G:'Gaj'
+};
 
   // iz "P-D" ili "S-PR" izvuci samo zadnji dio (D, PR, ...)
   function destCodeFromDir(dirCode) {
@@ -1451,22 +1600,25 @@ map.setView(st.latlng, Math.max(map.getZoom(), STATION_FOCUS_ZOOM));
   const allKeys = Array.from(routeStations.keys());
 
   // --- LINIJE: uzmi samo bazne linije bez "S" u nazivu (1,2,3,4,5,P1,P2) ---
-  const lineNames = Array.from(new Set(
-    allKeys
-      .map(k => k.split('_')[0])
-.filter(l =>
-  l &&
-  !String(l).includes('S') &&
-  String(l).toLowerCase() !== 'linija'
-)
+function baseLineName(line) {
+  return String(line || '')
+    .replace(/S$/, '')     // makni S
+    .replace(/[A-Z]$/, ''); // makni A/B/C sufiks
+}
+
+const lineNames = Array.from(new Set(
+  allKeys
+    .map(k => baseLineName(k.split('_')[0]))
+    .filter(l =>
+      l &&
+      String(l).toLowerCase() !== 'linija'
+    )
 )).sort((a,b)=>{
   const na = parseInt(a,10);
   const nb = parseInt(b,10);
 
-  // ako su obje numeričke → numerički redoslijed
   if (!isNaN(na) && !isNaN(nb)) return na - nb;
 
-  // inače fallback na tekst
   return String(a).localeCompare(String(b),'hr');
 });
   lineSel.innerHTML =
@@ -1495,7 +1647,7 @@ function populateDirs() {
     if (!dirCode) continue;
 
     const destCode = destCodeFromDir(dirCode); // npr. "G" ili "P"
-    if (destCode === 'G' || destCode === 'P') continue; // ⛔ makni iz dropdowna
+    //if (destCode === 'G' || destCode === 'P') continue; // ⛔ makni iz dropdowna
 
     const label = dirLabel(dirCode); // npr. "Dubrava"
     if (!label || label === 'undefined') continue;
@@ -1586,16 +1738,6 @@ clearBtn.addEventListener('click', () => {
     }
     return { prev, next };
   }
-
-  function getNextStopName(routeKey, frac) {
-    const ids = routeStations.get(routeKey);
-    if (!ids || ids.length < 2) return null;
-    const idx = Math.min(ids.length - 1, Math.max(1, Math.floor(frac * (ids.length - 1))));
-    const st = stationById.get(String(ids[idx]));
-    return st?.name || null;
-  }
-
-  /* ================= RENDER LOOP ================= */
 
   const layer = L.layerGroup().addTo(map);
   const markers = new Map();
@@ -1904,11 +2046,10 @@ popupState = {
   const labelTrip = next || prev;          // label na ikoni (linija) uzmi iz SLJEDEĆE vožnje ako postoji
   const textKey   = nextKey || prevKey;    // destinacija u popupu/filtru: sljedeća ruta, ako postoji
 
- // 🚋 OKRETIŠTE (nije spremište)
 if (!prevEndsDepot) {
+  const waitSec = next ? (next._t0 - t) : null;
 
-  // ⛔ ako NEMA sljedeće vožnje → makni i 1–5 (i sve ostale)
-  if (!next) {
+  if (!next || waitSec == null || waitSec > 15 * 60) {
     pos = null;
     trForLabel = null;
     popupState = null;
@@ -1921,7 +2062,7 @@ if (!prevEndsDepot) {
 
     popupState = {
       mode: 'waiting',
-      secondsLeft: (next._t0 - t),
+      secondsLeft: waitSec,
       routeKey: rk,
       networkRouteKey: nextKey || prevKey,
       nextStopName: null
@@ -2027,13 +2168,17 @@ if (!pos || !trForLabel || !popupState) {
 // 🔥 filtriranje po liniji (uključi i spremišne varijante tipa 9S)
 if (selectedLine) {
 
-  const rkLine = String(popupState.routeKey || '').split('_')[0]; // npr. 9 ili 9S
-  const rkBase = rkLine.replace(/S$/, ''); // 9S -> 9
+const rkLine = String(popupState.routeKey || '').split('_')[0];
 
-  if (rkBase !== selectedLine) {
-    if (existing) { layer.removeLayer(existing); markers.delete(vozilo); }
-    continue;
-  }
+// ukloni S i A/B/C sufikse
+const rkBase = rkLine
+  .replace(/S$/, '')
+  .replace(/[A-Z]$/, '');
+
+if (rkBase !== selectedLine) {
+  if (existing) { layer.removeLayer(existing); markers.delete(vozilo); }
+  continue;
+}
 }
       if (selectedDir && selectedRouteKeyFilter && (popupState.routeKey !== selectedRouteKeyFilter)) {
         if (existing) { layer.removeLayer(existing); markers.delete(vozilo); }
@@ -2076,7 +2221,7 @@ m.on('click', function (ev) {
   if (selectedRouteKey) highlightNetwork(selectedRouteKey);
 
 const rkNow = livePopup?.routeKey || '';
-const linija = displayLineForVehicle(liveTrip, rkNow);
+const linija = String(liveTrip.linija || '').replace(/[A-Z]$/, '');
 const smjer = destFromRouteKey(rkNow);
 const sljedecaStanica = livePopup?.nextStopName || null;
 const jePosljednjaStanica = !!livePopup?.nextStopIsFinal;
