@@ -525,10 +525,12 @@ if (smjer.includes('od')) {
 
     return null;
   }
-
-  function isDepotStart(routeKey) {
-    return (routeKey || '').includes('_S-');
-  }
+function isLine5Depot(routeKey) {
+  return /^5S_S-/.test(routeKey || '');
+}
+function isDepotStart(routeKey) {
+  return /_(S|SP)-/.test(routeKey || '');
+}
 
   function displayLineForVehicle(tr, routeKey) {
   // ide U spremište → pokaži samo "S"
@@ -2091,8 +2093,16 @@ if (!prevEndsDepot) {
 
   // 🔔 nakon DEPOT_POST u spremištu → sakrij, OSIM ako smo u DEPOT_PRE prije idućeg polaska iz spremišta
   else {
-    const canPreShow = next && nextKey && isDepotStart(nextKey) && (t >= next._t0 - DEPOT_PRE) && (t < next._t0);
-    if (canPreShow) {
+const canPreShow =
+  next &&
+  nextKey &&
+  isDepotStart(nextKey) &&
+  (t >= next._t0 - DEPOT_PRE) &&
+  (
+isLine5Depot(nextKey)      
+? (t <= next._t0)
+      : (t < next._t0)
+  );    if (canPreShow) {
       const rNext = buildRoute(nextKey);
       pos = (rNext && rNext.poly && rNext.poly.length) ? rNext.poly[0] : (endPos || null);
 
@@ -2119,8 +2129,16 @@ if (!prevEndsDepot) {
       else if (!prev && next) {
         rk = pickRouteKeyForTrip(next);
 
-        if (rk && isDepotStart(rk) && t >= next._t0 - DEPOT_PRE && t < next._t0) {
-          const r = buildRoute(rk);
+if (
+  rk &&
+  isDepotStart(rk) &&
+  t >= next._t0 - DEPOT_PRE &&
+  (
+isLine5Depot(rk)      
+? (t <= next._t0)
+      : (t < next._t0)
+  )
+) {          const r = buildRoute(rk);
 
           pos = (r && r.poly && r.poly.length) ? r.poly[0] : null;
           trForLabel = next;
